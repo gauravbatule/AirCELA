@@ -32,15 +32,6 @@ class CELAEngine:
 
     Run any LLM on consumer hardware by streaming layers through GPU one at a time.
 
-    Why First Token Is Slow (TTFT):
-        The first token requires the ENTIRE prompt to pass through ALL layers.
-        This is called "prefill" — it builds the KV cache that all future tokens reuse.
-        After prefill, each new token only processes ONE token through the layers
-        (the "decode" phase), which is much faster.
-
-        Additionally, on first use, the model weights must be loaded from disk
-        into the HuggingFace cache (download) and then mmap'd for reading.
-
     Supports:
         - HuggingFace models (safetensors): ``CELAEngine.from_pretrained("model/name")``
         - GGUF models (Ollama): ``CELAEngine.from_gguf("model.gguf")``
@@ -79,9 +70,6 @@ class CELAEngine:
         """
         Load a HuggingFace model for layer-by-layer inference.
 
-        This gives you FULL GPU control — unlike Ollama, every layer
-        runs on GPU regardless of model size.
-
         Args:
             model_name: HuggingFace model ID (e.g. "meta-llama/Llama-2-7b-hf")
         """
@@ -112,7 +100,6 @@ class CELAEngine:
         """
         from aircela.gguf import GGUFReader
         from aircela.quantize import Dequantizer
-        from transformers import AutoTokenizer
 
         engine = cls()
         reader = GGUFReader(path)
@@ -121,6 +108,7 @@ class CELAEngine:
         engine.config = config
 
         if tokenizer_id:
+            from transformers import AutoTokenizer
             print(f"  Loading tokenizer: {tokenizer_id}")
             engine.tokenizer = AutoTokenizer.from_pretrained(tokenizer_id)
         else:
@@ -139,13 +127,11 @@ class CELAEngine:
                         w = Dequantizer.dequantize(raw, info["shape"], info["qtype"])
                         
                         # Fix orientation (Common in GGUF/llama.cpp)
-                        # e.g. token_embd: (hidden, vocab) -> (vocab, hidden)
+                        # token_embd may be (hidden, vocab) -> need (vocab, hidden) for F.embedding
                         if "embd" in name and w.shape[0] == config["d_model"]:
                             w = w.T
-                        # head: (hidden, vocab) -> (vocab, hidden)
-                        if "output.weight" in name and w.shape[1] == config["d_model"]:
-                            pass # PyTorch head expects (vocab, hidden)
-                        elif "output.weight" in name and w.shape[0] == config["d_model"]:
+                        # output.weight (LM head): PyTorch expects (vocab, hidden)
+                        if "output.weight" in name and w.shape[0] == config["d_model"]:
                             w = w.T
                         return w
             return None
@@ -157,7 +143,9 @@ class CELAEngine:
         if engine.embed_weight is None:
             print("  [ERROR] Could not find token embeddings in GGUF!")
         if engine.lm_head_weight is None:
-            print("  [ERROR] Could not find LM head in GGUF!")
+            print("  [WARNING] No LM head found — will tie with embed weights.")
+            if engine.embed_weight is not None:
+                engine.lm_head_weight = engine.embed_weight
         if engine.final_norm_weight is None:
             print("  [ERROR] Could not find final norm in GGUF!")
 
@@ -171,7 +159,7 @@ class CELAEngine:
                     raw, info["shape"], info["qtype"]
                 )
                 
-                # GGUF weights are often (in, out), we want (out, in)
+                # GGUF weights are often (in, out), PyTorch linear expects (out, in)
                 if len(w.shape) == 2:
                     if any(x in name for x in ["attn_q", "attn_k", "attn_v", "attn_output"]):
                         if w.shape[0] == config["d_model"]:
@@ -196,7 +184,7 @@ class CELAEngine:
     def _init_runtime(self):
         """Initialize transformer layer, RoPE, prefetcher, KV caches."""
         c = self.config
-        n_layers = c.get("n_layers", c.get("n_layers", 32))
+        n_layers = c.get("n_layers", 32)
         head_dim = c.get("head_dim", c["d_model"] // c["n_heads"])
 
         self._layer = CELATransformerLayer(
@@ -207,10 +195,13 @@ class CELAEngine:
             head_dim=head_dim,
         )
 
+        # Support both rope_freq_base and rope_theta config keys
+        rope_base = c.get("rope_freq_base", c.get("rope_theta", 10000.0))
+
         self._rope = RotaryEmbedding(
             dim=head_dim,
             max_seq_len=8192,
-            base=c.get("rope_theta", 10000.0),
+            base=rope_base,
             dtype=self.dtype,
         )
 
@@ -234,23 +225,40 @@ class CELAEngine:
         stream: bool = True,
     ):
         """
-        Generate text from a prompt or input_ids.
+        Generate text from a prompt or raw input_ids.
+
+        Args:
+            prompt:      Input text (requires tokenizer)
+            input_ids:   Raw token IDs tensor (alternative to prompt)
+            max_tokens:  Maximum tokens to generate
+            temperature: Sampling temperature (0 = greedy)
+            top_k:       Top-K sampling parameter
+            stream:      If True, yield tokens as they are generated
+
+        Yields:
+            str or int: Generated tokens (text if tokenizer loaded, else int IDs)
         """
+        # Resolve input
         if prompt is None and input_ids is None:
-            raise ValueError("Either prompt or input_ids must be provided.")
-        
+            raise ValueError("Either 'prompt' or 'input_ids' must be provided.")
+
         if prompt is not None:
             if self.tokenizer is None:
-                raise RuntimeError("No tokenizer loaded. Provide tokenizer_id during initialization or pass input_ids directly.")
+                raise RuntimeError(
+                    "No tokenizer loaded. Provide tokenizer_id= when calling from_gguf(), "
+                    "or pass input_ids= directly."
+                )
             input_ids = self.tokenizer(prompt, return_tensors="pt")["input_ids"]
-        
+
         if self._load_layer_fn is None:
             raise RuntimeError("No model loaded.")
+        if self.embed_weight is None:
+            raise RuntimeError("No embedding weight loaded.")
 
         n_layers = self.config.get("n_layers", 32)
         device = self.device
+        has_tokenizer = self.tokenizer is not None
 
-        # Tokenize (already done if input_ids provided or prompt processed)
         all_ids = input_ids.clone()
         generated = []
 
@@ -258,10 +266,9 @@ class CELAEngine:
         self._kv_caches = [None] * n_layers
 
         t_start = time.perf_counter()
+        ttft = 0.0
 
         for step in range(max_tokens):
-            t_step = time.perf_counter()
-
             # Embed
             if step == 0:
                 x = F.embedding(all_ids, self.embed_weight).to(device, self.dtype)
@@ -316,20 +323,22 @@ class CELAEngine:
             all_ids = torch.cat([all_ids, torch.tensor([[next_id]])], dim=1)
 
             # Decode and yield
-            token_text = self.tokenizer.decode([next_id])
+            if has_tokenizer:
+                token_text = self.tokenizer.decode([next_id])
+            else:
+                token_text = str(next_id)
 
             if step == 0:
                 ttft = time.perf_counter() - t_start
-                if stream:
-                    yield token_text
 
-            elif stream:
+            if stream:
                 yield token_text
+                sys.stdout.flush()
 
             # EOS check
-            if (self.tokenizer.eos_token_id is not None
-                    and next_id == self.tokenizer.eos_token_id):
-                break
+            if has_tokenizer and self.tokenizer.eos_token_id is not None:
+                if next_id == self.tokenizer.eos_token_id:
+                    break
 
         # Stats
         elapsed = time.perf_counter() - t_start
@@ -337,18 +346,23 @@ class CELAEngine:
         tps = n_tok / elapsed if elapsed > 0 else 0
 
         if not stream:
-            yield self.tokenizer.decode(generated, skip_special_tokens=True)
+            if has_tokenizer:
+                yield self.tokenizer.decode(generated, skip_special_tokens=True)
+            else:
+                yield " ".join(str(t) for t in generated)
 
         # Print stats
         print(f"\n  [{tps:.1f} tok/s | {n_tok} tokens | TTFT {ttft:.1f}s | "
               f"Total {elapsed:.1f}s]")
-        self._prefetcher.print_stats()
+        if self._prefetcher:
+            self._prefetcher.print_stats()
 
     def reset(self):
         """Reset KV caches for a new conversation."""
         n_layers = self.config.get("n_layers", 32)
         self._kv_caches = [None] * n_layers
-        self._prefetcher.clear()
+        if self._prefetcher:
+            self._prefetcher.clear()
         if self.dm.has_cuda:
             torch.cuda.empty_cache()
         gc.collect()

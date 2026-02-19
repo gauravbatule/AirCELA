@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.9"
 license = {text = "CELA Proprietary License — See LICENSE"}
 authors = [
-    {name = "Gaurav Batule", email = "gauravbatule@cela-engine.dev"},
+    {name = "Gaurav Batule", email = "gauravbatule@gmail.com"},
 ]
 keywords = ["airllm", "llm", "inference", "gpu", "transformer", "gguf", "huggingface", "layer-streaming", "vram-optimization"]
 classifiers = [
@@ -28,6 +28,11 @@ dependencies = [
     "huggingface_hub>=0.19",
     "safetensors>=0.4",
 ]
+
+[project.urls]
+Homepage = "https://github.com/gauravbatule/AirCELA"
+Repository = "https://github.com/gauravbatule/AirCELA"
+Issues = "https://github.com/gauravbatule/AirCELA/issues"
 
 [project.scripts]
 aircela = "aircela.cli:main"

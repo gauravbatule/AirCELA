@@ -9,9 +9,10 @@ dist/
 build/
 *.egg
 
-# Test output files
+# Test/debug output files
 *.txt
 !requirements.txt
+*.log
 
 # IDE
 .vscode/
@@ -39,4 +40,6 @@ __cela_bench_tmp__
 # Legacy files (old prototypes)
 _legacy/
 
-*.log
+# Diagnostic/test scripts (not part of the package)
+diag.py
+diag_out.txt

@@ -5,6 +5,8 @@ Reads GGUF v2/v3 headers, extracts tensor metadata and raw data
 for on-the-fly dequantization. Supports models from Ollama's
 blob storage.
 
+FAST: Uses mmap + bulk reads to parse multi-GB files in seconds.
+
 Developed by Gaurav Batule | 🤖 AI-assisted vibe code
 """
 
@@ -29,6 +31,8 @@ class GGUFReader:
     """
     Parse a GGUF file and provide access to tensor data.
 
+    Uses mmap for fast parsing of multi-GB files.
+
     Usage::
 
         reader = GGUFReader("model.gguf")
@@ -45,33 +49,41 @@ class GGUFReader:
         self._parse()
 
     # ------------------------------------------------------------------
-    #  Parsing
+    #  Fast Parsing using mmap
     # ------------------------------------------------------------------
     def _parse(self):
-        """Read GGUF header and build tensor index."""
+        """Read GGUF header and build tensor index using mmap for speed."""
+        file_size = self.path.stat().st_size
+        
         with open(self.path, "rb") as f:
-            magic = struct.unpack("<I", f.read(4))[0]
+            mm = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+            pos = 0
+            
+            # Header
+            magic = struct.unpack_from("<I", mm, pos)[0]; pos += 4
             if magic != GGUF_MAGIC:
                 raise ValueError(f"Not a GGUF file: bad magic 0x{magic:08X}")
 
-            version = struct.unpack("<I", f.read(4))[0]
-            n_tensors = struct.unpack("<Q", f.read(8))[0]
-            n_metadata = struct.unpack("<Q", f.read(8))[0]
+            version = struct.unpack_from("<I", mm, pos)[0]; pos += 4
+            n_tensors = struct.unpack_from("<Q", mm, pos)[0]; pos += 8
+            n_metadata = struct.unpack_from("<Q", mm, pos)[0]; pos += 8
 
-            # Read metadata key-value pairs
+            # Read metadata (FAST: skip large arrays we don't need)
             for _ in range(n_metadata):
-                key = self._read_string(f)
-                vtype = struct.unpack("<I", f.read(4))[0]
-                value = self._read_value(f, vtype)
-                self.metadata[key] = value
+                key, pos = self._read_string_fast(mm, pos)
+                vtype = struct.unpack_from("<I", mm, pos)[0]; pos += 4
+                value, pos = self._read_value_fast(mm, pos, vtype, key)
+                if value is not None:  # Only store non-skipped values
+                    self.metadata[key] = value
 
             # Read tensor info
             for _ in range(n_tensors):
-                name = self._read_string(f)
-                n_dims = struct.unpack("<I", f.read(4))[0]
-                shape = tuple(struct.unpack("<Q", f.read(8))[0] for _ in range(n_dims))
-                qtype = struct.unpack("<I", f.read(4))[0]
-                offset = struct.unpack("<Q", f.read(8))[0]
+                name, pos = self._read_string_fast(mm, pos)
+                n_dims = struct.unpack_from("<I", mm, pos)[0]; pos += 4
+                shape = tuple(struct.unpack_from("<Q", mm, pos + i*8)[0] for i in range(n_dims))
+                pos += n_dims * 8
+                qtype = struct.unpack_from("<I", mm, pos)[0]; pos += 4
+                offset = struct.unpack_from("<Q", mm, pos)[0]; pos += 8
 
                 n_elements = 1
                 for s in shape:
@@ -104,38 +116,83 @@ class GGUFReader:
                 }
 
             # Data starts at next 32-byte aligned boundary
-            pos = f.tell()
             self._data_offset = pos + (32 - pos % 32) % 32
+            mm.close()
 
     # ------------------------------------------------------------------
-    #  Low-level readers
+    #  Fast low-level readers (mmap-based)
     # ------------------------------------------------------------------
     @staticmethod
-    def _read_string(f) -> str:
-        length = struct.unpack("<Q", f.read(8))[0]
-        return f.read(length).decode("utf-8", errors="replace")
+    def _read_string_fast(mm, pos):
+        length = struct.unpack_from("<Q", mm, pos)[0]; pos += 8
+        s = mm[pos:pos+length].decode("utf-8", errors="replace"); pos += length
+        return s, pos
 
     @staticmethod
-    def _read_value(f, vtype):
-        if vtype == 0:   return struct.unpack("<B", f.read(1))[0]      # uint8
-        elif vtype == 1: return struct.unpack("<b", f.read(1))[0]      # int8
-        elif vtype == 2: return struct.unpack("<H", f.read(2))[0]      # uint16
-        elif vtype == 3: return struct.unpack("<h", f.read(2))[0]      # int16
-        elif vtype == 4: return struct.unpack("<I", f.read(4))[0]      # uint32
-        elif vtype == 5: return struct.unpack("<i", f.read(4))[0]      # int32
-        elif vtype == 6: return struct.unpack("<f", f.read(4))[0]      # float32
-        elif vtype == 7: return struct.unpack("<?", f.read(1))[0]      # bool
-        elif vtype == 8:                                                # string
-            return GGUFReader._read_string(f)
-        elif vtype == 9:                                                # array
-            atype = struct.unpack("<I", f.read(4))[0]
-            alen = struct.unpack("<Q", f.read(8))[0]
-            return [GGUFReader._read_value(f, atype) for _ in range(alen)]
-        elif vtype == 10: return struct.unpack("<Q", f.read(8))[0]     # uint64
-        elif vtype == 11: return struct.unpack("<q", f.read(8))[0]     # int64
-        elif vtype == 12: return struct.unpack("<d", f.read(8))[0]     # float64
+    def _read_value_fast(mm, pos, vtype, key=""):
+        """Read a value, but SKIP large arrays (tokenizer vocabs) for speed."""
+        if vtype == 0:    # uint8
+            v = struct.unpack_from("<B", mm, pos)[0]; pos += 1; return v, pos
+        elif vtype == 1:  # int8
+            v = struct.unpack_from("<b", mm, pos)[0]; pos += 1; return v, pos
+        elif vtype == 2:  # uint16
+            v = struct.unpack_from("<H", mm, pos)[0]; pos += 2; return v, pos
+        elif vtype == 3:  # int16
+            v = struct.unpack_from("<h", mm, pos)[0]; pos += 2; return v, pos
+        elif vtype == 4:  # uint32
+            v = struct.unpack_from("<I", mm, pos)[0]; pos += 4; return v, pos
+        elif vtype == 5:  # int32
+            v = struct.unpack_from("<i", mm, pos)[0]; pos += 4; return v, pos
+        elif vtype == 6:  # float32
+            v = struct.unpack_from("<f", mm, pos)[0]; pos += 4; return v, pos
+        elif vtype == 7:  # bool
+            v = struct.unpack_from("<?", mm, pos)[0]; pos += 1; return v, pos
+        elif vtype == 8:  # string
+            return GGUFReader._read_string_fast(mm, pos)
+        elif vtype == 9:  # array
+            atype = struct.unpack_from("<I", mm, pos)[0]; pos += 4
+            alen = struct.unpack_from("<Q", mm, pos)[0]; pos += 8
+            
+            # SKIP large arrays (tokenizer vocabs can have 32k+ entries)
+            # These are not needed for inference — we use HF tokenizers
+            if alen > 1000:
+                # Fast-skip: calculate byte size and jump
+                pos = GGUFReader._skip_array_fast(mm, pos, atype, alen)
+                return None, pos
+            
+            result = []
+            for _ in range(alen):
+                v, pos = GGUFReader._read_value_fast(mm, pos, atype)
+                result.append(v)
+            return result, pos
+        elif vtype == 10:  # uint64
+            v = struct.unpack_from("<Q", mm, pos)[0]; pos += 8; return v, pos
+        elif vtype == 11:  # int64
+            v = struct.unpack_from("<q", mm, pos)[0]; pos += 8; return v, pos
+        elif vtype == 12:  # float64
+            v = struct.unpack_from("<d", mm, pos)[0]; pos += 8; return v, pos
         else:
-            return None
+            return None, pos
+
+    @staticmethod
+    def _skip_array_fast(mm, pos, atype, alen):
+        """Skip over an array without reading its contents."""
+        # Fixed-size types can be skipped immediately
+        fixed_sizes = {0: 1, 1: 1, 2: 2, 3: 2, 4: 4, 5: 4, 6: 4, 7: 1, 10: 8, 11: 8, 12: 8}
+        if atype in fixed_sizes:
+            return pos + alen * fixed_sizes[atype]
+        
+        # String arrays: must walk through (each has 8-byte len + data)
+        if atype == 8:
+            for _ in range(alen):
+                slen = struct.unpack_from("<Q", mm, pos)[0]; pos += 8
+                pos += slen
+            return pos
+        
+        # Nested arrays or unknown: walk element by element
+        for _ in range(alen):
+            _, pos = GGUFReader._read_value_fast(mm, pos, atype)
+        return pos
 
     # ------------------------------------------------------------------
     #  Public API
@@ -147,7 +204,7 @@ class GGUFReader:
         
         with open(self.path, "rb") as f:
             with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm:
-                return mm[offset : offset + info["size_bytes"]]
+                return bytes(mm[offset : offset + info["size_bytes"]])
 
     def get_n_layers(self) -> int:
         """Return the number of transformer layers."""
