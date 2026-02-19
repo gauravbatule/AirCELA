@@ -8,10 +8,11 @@
 <p align="center">
   <a href="#installation">Installation</a> •
   <a href="#quick-start">Quick Start</a> •
+  <a href="#ollama--gguf-models">Ollama / GGUF</a> •
+  <a href="#cli-commands">CLI</a> •
   <a href="#how-it-works">How It Works</a> •
-  <a href="#speed-optimizations">Speed Optimizations</a> •
   <a href="#api-reference">API Reference</a> •
-  <a href="#credits">Credits</a>
+  <a href="#troubleshooting">Troubleshooting</a>
 </p>
 
 ---
@@ -32,92 +33,181 @@ While AirLLM pioneered the concept, AirCELA takes it to the next level with **Do
 | **Attention** | Standard | **Flash Attention (cuDNN fused)** |
 | **Model Support** | HF only | **HF + GGUF (Ollama)** |
 | **Dequantization** | Standard | **Vectorized NumPy Kernels** |
-| **CLI tool** | ❌ | ✅ (`aircela chat`) |
+| **CLI tool** | ❌ | ✅ (`aircela chat`, `aircela bench`) |
 
 ---
 
 ## 📦 Installation
 
+### Step 1: Clone the repo
+
 ```bash
-# Clone the repository
 git clone https://github.com/gauravbatule/AirCELA.git
 cd AirCELA
+```
 
-# Install dependencies
+### Step 2: Install dependencies
+
+```bash
 pip install -r requirements.txt
+```
 
-# Or install as a package (editable mode)
+> **Note:** This installs PyTorch, NumPy, transformers, huggingface_hub, safetensors, psutil, and accelerate.
+
+### Step 3 (Optional): Install as a CLI tool
+
+```bash
 pip install -e .
 ```
 
+This gives you the `aircela` and `cela` commands system-wide. Without this step, you can still use `python -m aircela.cli` or the Python API directly.
+
 ### Requirements
-- Python 3.9+
-- PyTorch 2.0+ (with CUDA support recommended)
-- 4GB+ GPU VRAM (NVIDIA, any generation)
-- 8GB+ System RAM
+
+- **Python**: 3.9 or higher
+- **PyTorch**: 2.0+ (CUDA support recommended for GPU inference)
+- **GPU**: Any NVIDIA GPU with 4GB+ VRAM (RTX 3050, GTX 1650, etc.)
+- **RAM**: 8GB+ system RAM
+- **OS**: Windows 10/11, Linux, macOS
 
 ---
 
 ## 🚀 Quick Start
 
-### Option 1: HuggingFace Models (Recommended for first-time)
+### Using the Python API (HuggingFace Models)
+
+The simplest way to start — downloads the model automatically:
 
 ```python
+# File: my_test.py
+import sys
+sys.path.insert(0, ".")  # Only needed if you didn't pip install
+
 from aircela import CELAEngine
 
-# Load ANY HuggingFace model — no VRAM limit!
+# Load a model (downloads automatically on first run)
 engine = CELAEngine.from_pretrained("TinyLlama/TinyLlama-1.1B-Chat-v1.0")
 
-# Stream tokens as they generate
+# Generate text — tokens stream one at a time
 for token in engine.generate("What is the capital of France?", max_tokens=50):
     print(token, end="", flush=True)
+print()
 ```
 
+Run it:
+
 ```bash
-# Run the example script
+cd AirCELA
+python my_test.py
+```
+
+Or use the included example:
+
+```bash
 python examples/basic_generation.py
 ```
 
-### Option 2: Ollama / GGUF Models
+---
 
-AirCELA can load GGUF models you've already downloaded with Ollama:
+## 🦙 Ollama / GGUF Models
+
+AirCELA can directly load GGUF models you've already downloaded with Ollama.
+
+### Step 1: Pull a model with Ollama
 
 ```bash
-# First, pull a model with Ollama
 ollama pull mistral-small:22b
+```
 
-# Then run with AirCELA (much more control over GPU usage)
+### Step 2: Run with AirCELA
+
+```bash
+# List available Ollama models on your system
+python examples/ollama_inference.py
+
+# Run a model (without tokenizer — outputs raw token IDs)
 python examples/ollama_inference.py mistral-small:22b
 
-# With a HuggingFace tokenizer for proper text output
+# Run with a HuggingFace tokenizer for readable text
 python examples/ollama_inference.py mistral-small:22b mistralai/Mistral-Small-Instruct-2409
 ```
 
+### Using the Python API directly
+
 ```python
-# Or use the Python API directly
+import sys
+sys.path.insert(0, ".")
+
 from aircela import CELAEngine
 
+# Load a GGUF model from Ollama or a direct file path
 engine = CELAEngine.from_gguf(
-    "/path/to/model.gguf",
+    "C:/Users/YourName/.ollama/models/blobs/sha256-<hash>",
     tokenizer_id="mistralai/Mistral-Small-Instruct-2409"  # optional
 )
 
 for token in engine.generate("Explain quantum computing.", max_tokens=100):
     print(token, end="", flush=True)
+print()
 ```
 
-### Option 3: Command Line
+> **Tip:** Run `python examples/ollama_inference.py` with no arguments to see all available Ollama models and their file paths.
+
+---
+
+## 🖥️ CLI Commands
+
+> **Prerequisite:** You must install AirCELA as a package first: `pip install -e .`
+
+### `aircela info` — Show hardware info
 
 ```bash
-# Interactive chat
-aircela chat -m "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
-
-# Single prompt
-aircela run -m "mistralai/Mistral-7B-v0.1" -p "Tell me a joke"
-
-# System info & benchmarks
 aircela info
+```
+
+Shows your GPU name, VRAM, RAM, and compute capability.
+
+### `aircela chat` — Interactive chat
+
+```bash
+aircela chat -m "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+```
+
+Options:
+- `-m MODEL` — HuggingFace model ID (required)
+- `-n NUM` — Max tokens to generate (default: 200)
+- `-t TEMP` — Temperature 0.0–1.0 (default: 0.7)
+
+In-chat commands: `/quit`, `/clear`, `/reset`
+
+### `aircela run` — Single prompt generation
+
+```bash
+aircela run -m "TinyLlama/TinyLlama-1.1B-Chat-v1.0" -p "Tell me a joke"
+```
+
+Options:
+- `-m MODEL` — HuggingFace model ID (required)
+- `-p PROMPT` — Input prompt (required)
+- `-n NUM` — Max tokens (default: 100)
+- `-t TEMP` — Temperature (default: 0.7)
+
+### `aircela bench` — Benchmark hardware
+
+```bash
 aircela bench
+```
+
+Tests RAM bandwidth, GPU bandwidth, GEMM performance, and SSD read speed.
+
+### Without `pip install`
+
+If you haven't installed the package, you can use the CLI via Python module:
+
+```bash
+python -m aircela.cli info
+python -m aircela.cli chat -m "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+python -m aircela.cli bench
 ```
 
 ---
@@ -166,27 +256,34 @@ Token → Embed → [Layer 0 → Layer 1 → ... → Layer N] → Norm → LM He
 ## 📖 API Reference
 
 ### `CELAEngine.from_pretrained(model_name)`
-Load a HuggingFace model for layer-by-layer inference.
+
+Load any HuggingFace model. Downloads and caches automatically.
+
 ```python
+from aircela import CELAEngine
 engine = CELAEngine.from_pretrained("TinyLlama/TinyLlama-1.1B-Chat-v1.0")
 ```
 
 ### `CELAEngine.from_gguf(path, tokenizer_id=None)`
-Load a GGUF model (from Ollama or llama.cpp).
+
+Load a GGUF model file (from Ollama or llama.cpp).
+
 ```python
+engine = CELAEngine.from_gguf("/path/to/model.gguf")
+# Or with a tokenizer for readable text output:
 engine = CELAEngine.from_gguf("/path/to/model.gguf", tokenizer_id="org/model-name")
 ```
 
-### `engine.generate(prompt, max_tokens=100, temperature=0.7, top_k=50, stream=True)`
-Generate text. Yields tokens one at a time when `stream=True`.
+### `engine.generate(prompt=..., input_ids=..., max_tokens=100, temperature=0.7, top_k=50, stream=True)`
+
+Generate text. Yields tokens one by one when `stream=True`.
+
 ```python
+# From a text prompt (requires tokenizer)
 for token in engine.generate("Hello!", max_tokens=50):
     print(token, end="")
-```
 
-### `engine.generate(input_ids=tensor, ...)`
-Generate from raw token IDs (useful when no tokenizer is available).
-```python
+# From raw token IDs (no tokenizer needed)
 import torch
 ids = torch.tensor([[1, 4071, 28747]])
 for tok in engine.generate(input_ids=ids, max_tokens=20):
@@ -194,7 +291,8 @@ for tok in engine.generate(input_ids=ids, max_tokens=20):
 ```
 
 ### `engine.reset()`
-Clear KV caches for a new conversation.
+
+Clear KV caches to start a fresh conversation.
 
 ---
 
@@ -202,24 +300,72 @@ Clear KV caches for a new conversation.
 
 ```
 AirCELA/
-├── aircela/
-│   ├── __init__.py       # Package init (lazy imports)
-│   ├── engine.py         # Core inference engine
-│   ├── transformer.py    # Transformer layer (RoPE, GQA, Flash Attention)
-│   ├── prefetch.py       # Double-buffer layer prefetcher
-│   ├── gguf.py           # Fast GGUF parser (mmap-based)
-│   ├── quantize.py       # Dequantization kernels (Q4_0, Q6_K, etc.)
-│   ├── huggingface.py    # HuggingFace model loader
-│   ├── device.py         # Hardware auto-detection
-│   └── cli.py            # Command-line interface
+├── aircela/                    # Main package
+│   ├── __init__.py             # Lazy imports (fast startup)
+│   ├── engine.py               # Core inference engine
+│   ├── transformer.py          # Transformer layer (RoPE, GQA, Flash Attention)
+│   ├── prefetch.py             # Double-buffer layer prefetcher
+│   ├── gguf.py                 # Fast GGUF parser (mmap-based)
+│   ├── quantize.py             # Dequantization kernels (Q4_0, Q6_K, etc.)
+│   ├── huggingface.py          # HuggingFace model loader
+│   ├── device.py               # Hardware auto-detection
+│   └── cli.py                  # Command-line interface
 ├── examples/
-│   ├── basic_generation.py    # HuggingFace model example
-│   └── ollama_inference.py    # Ollama/GGUF model example
-├── requirements.txt
-├── pyproject.toml
-├── LICENSE
-└── README.md
+│   ├── basic_generation.py     # HuggingFace model example
+│   └── ollama_inference.py     # Ollama/GGUF model example
+├── _legacy/                    # Old prototypes (not part of the package)
+├── requirements.txt            # Python dependencies
+├── pyproject.toml              # Package configuration
+├── LICENSE                     # CELA Proprietary License
+└── README.md                   # This file
 ```
+
+---
+
+## 🔧 Troubleshooting
+
+### "Import takes forever" / Python hangs on startup
+
+**Cause:** PyTorch's first import can take 1–3 minutes on Windows due to CUDA detection and DLL loading.
+
+**Fix:** This is a one-time cost per Python process. AirCELA uses lazy imports so the `aircela` package itself loads instantly — torch only loads when you actually call `CELAEngine`.
+
+**Speed it up:**
+1. Add your Python installation folder to Windows Defender exclusions
+2. Use an SSD for your Python environment
+3. Keep a Python REPL open to avoid repeated cold starts
+
+### "No tokenizer loaded" error
+
+**Cause:** GGUF models from Ollama don't include tokenizers.
+
+**Fix:** Provide a HuggingFace tokenizer ID:
+```python
+engine = CELAEngine.from_gguf("model.gguf", tokenizer_id="mistralai/Mistral-7B-v0.1")
+```
+
+Or use `input_ids` directly:
+```python
+import torch
+ids = torch.tensor([[1, 4071]])
+for tok in engine.generate(input_ids=ids, max_tokens=20):
+    print(tok)
+```
+
+### "MemoryError" during generation
+
+**Cause:** Large models (22B+) require significant RAM for dequantization.
+
+**Fix:**
+1. Close other applications to free RAM
+2. Use a smaller model (7B or 3B)
+3. Make sure you have at least 16GB RAM for 22B models
+
+### "Unsupported GGUF qtype" warning
+
+**Cause:** The model uses a quantization format AirCELA doesn't support yet.
+
+**Supported:** F32, F16, Q4_0, Q4_1, Q8_0, Q6_K
 
 ---
 
@@ -232,10 +378,10 @@ AirCELA/
   </tr>
   <tr>
     <td colspan="2">
-      <em>AirCELA was conceived and developed by Gaurav Batule to solve the problem
-      of running large language models on consumer hardware. The engine's core
-      architecture — layer streaming with double-buffer prefetching, native GGUF
-      support, and automatic hardware optimization — was designed and validated
+      <em>AirCELA was built by Gaurav Batule to solve the problem of running
+      large language models on consumer hardware. The engine's core architecture —
+      layer streaming with double-buffer prefetching, native GGUF support, and
+      automatic hardware optimization — was designed, developed, and validated
       by Gaurav.</em>
     </td>
   </tr>
@@ -261,6 +407,8 @@ AirCELA/
 - ✅ Free for personal and educational use
 - ✅ Attribution required (credit Gaurav Batule)
 - ❌ Commercial use requires a separate license
+
+**Contact:** gauravbatule@gmail.com
 
 ---
 
