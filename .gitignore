@@ -38,3 +38,5 @@ __cela_bench_tmp__
 
 # Legacy files (old prototypes)
 _legacy/
+
+*.log

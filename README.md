@@ -75,6 +75,18 @@ aircela chat -m "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
 aircela run -m "mistralai/Mistral-7B-v0.1" -p "Tell me a joke"
 ```
 
+### Running Ollama Models (GGUF)
+
+AirCELA can directly load models you've already downloaded with Ollama!
+
+```bash
+# Example: Running Mistral-Small (22B)
+# You need the corresponding HF tokenizer ID for correct decoding
+python examples/ollama_inference.py "mistral-small:22b" "mistralai/Mistral-Small-Instruct-2409"
+```
+
+This works by finding the GGUF blob in your `~/.ollama` directory and streaming it layer-by-layer. No conversion needed.
+
 ---
 
 ## 🏎️ Speed Optimizations

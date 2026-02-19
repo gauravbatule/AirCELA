@@ -101,15 +101,18 @@ class CELAEngine:
         return engine
 
     @classmethod
-    def from_gguf(cls, path: str) -> "CELAEngine":
+    def from_gguf(cls, path: str, tokenizer_id: Optional[str] = None) -> "CELAEngine":
         """
         Load a GGUF model (from Ollama or llama.cpp) for inference.
 
         Args:
-            path: Path to .gguf file
+            path:         Path to .gguf file
+            tokenizer_id: Optional HF model ID for the tokenizer
+                          (e.g. "mistralai/Mistral-7B-v0.1")
         """
         from aircela.gguf import GGUFReader
         from aircela.quantize import Dequantizer
+        from transformers import AutoTokenizer
 
         engine = cls()
         reader = GGUFReader(path)
@@ -117,15 +120,70 @@ class CELAEngine:
 
         engine.config = config
 
+        if tokenizer_id:
+            print(f"  Loading tokenizer: {tokenizer_id}")
+            engine.tokenizer = AutoTokenizer.from_pretrained(tokenizer_id)
+        else:
+            print("  Warning: No tokenizer_id provided for GGUF model.")
+            print("  Generation will return raw token IDs.")
+
+        # Load base weights (embed, head, final_norm)
+        def find_weight(patterns):
+            if isinstance(patterns, str): patterns = [patterns]
+            for name in reader.tensors:
+                for pattern in patterns:
+                    if pattern in name and not name.startswith("blk."):
+                        print(f"  Found base weight: {name} for {patterns}")
+                        raw = reader.load_tensor_data(name)
+                        info = reader.tensors[name]
+                        w = Dequantizer.dequantize(raw, info["shape"], info["qtype"])
+                        
+                        # Fix orientation (Common in GGUF/llama.cpp)
+                        # e.g. token_embd: (hidden, vocab) -> (vocab, hidden)
+                        if "embd" in name and w.shape[0] == config["d_model"]:
+                            w = w.T
+                        # head: (hidden, vocab) -> (vocab, hidden)
+                        if "output.weight" in name and w.shape[1] == config["d_model"]:
+                            pass # PyTorch head expects (vocab, hidden)
+                        elif "output.weight" in name and w.shape[0] == config["d_model"]:
+                            w = w.T
+                        return w
+            return None
+
+        engine.embed_weight = find_weight(["token_embd", "wte"])
+        engine.lm_head_weight = find_weight(["output.weight", "lm_head"])
+        engine.final_norm_weight = find_weight(["output_norm", "final_norm"])
+
+        if engine.embed_weight is None:
+            print("  [ERROR] Could not find token embeddings in GGUF!")
+        if engine.lm_head_weight is None:
+            print("  [ERROR] Could not find LM head in GGUF!")
+        if engine.final_norm_weight is None:
+            print("  [ERROR] Could not find final norm in GGUF!")
+
         # Set up layer loader that dequantizes on-the-fly
         def load_layer(idx: int) -> Dict[str, torch.Tensor]:
             tensors = reader.get_layer_tensors(idx)
             weights = {}
             for name, info in tensors.items():
                 raw = reader.load_tensor_data(name)
-                weights[name] = Dequantizer.dequantize(
+                w = Dequantizer.dequantize(
                     raw, info["shape"], info["qtype"]
                 )
+                
+                # GGUF weights are often (in, out), we want (out, in)
+                if len(w.shape) == 2:
+                    if any(x in name for x in ["attn_q", "attn_k", "attn_v", "attn_output"]):
+                        if w.shape[0] == config["d_model"]:
+                            w = w.T
+                    elif any(x in name for x in ["ffn_up", "ffn_gate"]):
+                        if w.shape[0] == config["d_model"]:
+                            w = w.T
+                    elif "ffn_down" in name:
+                        if w.shape[1] == config["d_model"]:
+                            w = w.T
+                            
+                weights[name] = w
             return weights
 
         engine._load_layer_fn = load_layer

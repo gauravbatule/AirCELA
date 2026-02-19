@@ -172,12 +172,22 @@ class GGUFReader:
     def get_model_config(self) -> dict:
         """Extract model architecture config from metadata."""
         def _m(key, default=None):
+            # Try specific architecture-prefixed keys first
+            arch = self.metadata.get("general.architecture", "llama")
+            specific_key = f"{arch}.{key}"
+            if specific_key in self.metadata:
+                return self.metadata[specific_key]
+            
+            # fallback to loose search but be careful about head_count vs head_count_kv
             for k, v in self.metadata.items():
                 if key in k:
+                    # If looking for head_count, don't match head_count_kv
+                    if key == "attention.head_count" and "head_count_kv" in k:
+                        continue
                     return v
             return default
 
-        arch = _m("general.architecture", "unknown")
+        arch = self.metadata.get("general.architecture", "unknown")
         return {
             "architecture": arch,
             "d_model": _m("embedding_length", 4096),

@@ -38,11 +38,11 @@ class Dequantizer:
             shape:    Original tensor shape from GGUF metadata
             qtype:    GGUF quantization type ID
 
-        Returns:
-            torch.Tensor in float16
         """
         if torch is None:
             raise ImportError("PyTorch is required for dequantization")
+            
+        # print(f"  Dequantizing: shape={shape} qtype={qtype}")
 
         n_elements = 1
         for s in shape:
@@ -65,11 +65,71 @@ class Dequantizer:
         elif qtype == 8:  # Q8_0 — 32 values per block, 34 bytes/block
             return Dequantizer._dequant_q8_0(raw_data, n_elements, shape)
 
+        elif qtype == 14: # Q6_K — 256 values per block, 210 bytes/block
+            return Dequantizer._dequant_q6_k(raw_data, n_elements, shape)
+
         else:
             # Unsupported format — return zeros with a warning
             import warnings
             warnings.warn(f"Unsupported GGUF qtype {qtype}, returning zeros")
             return torch.zeros(shape, dtype=torch.float16)
+
+    # ------------------------------------------------------------------
+    #  Q6_K: 256 values per block, 210 bytes/block
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _dequant_q6_k(raw: bytes, n_elements: int, shape: tuple) -> "torch.Tensor":
+        block_size = 210
+        n_blocks = len(raw) // block_size
+        data = np.frombuffer(raw, dtype=np.uint8).reshape(n_blocks, block_size)
+
+        # ql: 4-bit part (128 bytes -> 256 nibbles)
+        ql = data[:, :128]
+        # qh: 2-bit part (64 bytes -> 256 bits)
+        qh = data[:, 128:192]
+        # scales: 8-bit part (16 bytes)
+        sc = data[:, 192:208].copy().view(np.int8).astype(np.float32)
+        # d: global scale (2 bytes float16)
+        d = data[:, 208:210].copy().view(np.float16).astype(np.float32)
+
+        # Reconstruct 6-bit values
+        # This is a simplified vectorized version
+        values = np.empty((n_blocks, 256), dtype=np.float32)
+        
+        for i in range(64):
+            # Each byte of qh provides 2 bits for 4 different elements
+            # Elements: i, i+64, i+128, i+192
+            h = qh[:, i]
+            
+            # Element i
+            l0 = ql[:, i] & 0xF
+            h0 = (h & 0x03) << 4
+            values[:, i] = (l0 | h0).astype(np.float32) - 32
+            
+            # Element i+64
+            l1 = ql[:, i+64] & 0xF
+            h1 = (h & 0x0C) << 2
+            values[:, i+64] = (l1 | h1).astype(np.float32) - 32
+            
+            # Element i+128
+            l2 = ql[:, i] >> 4
+            h2 = (h & 0x30)
+            values[:, i+128] = (l2 | h2).astype(np.float32) - 32
+            
+            # Element i+192
+            l3 = ql[:, i+64] >> 4
+            h3 = (h & 0xC0) >> 2
+            values[:, i+192] = (l3 | h3).astype(np.float32) - 32
+
+        # Apply sub-scales and global scale
+        # values is (n_blocks, 256), sc is (n_blocks, 16)
+        # Reshape to use broadcasting: (n_blocks, 16, 16) * (n_blocks, 16, 1)
+        values = values.reshape(n_blocks, 16, 16)
+        values *= sc[:, :, np.newaxis]
+        values *= d[:, np.newaxis]
+        
+        result = values.ravel()[:n_elements]
+        return torch.from_numpy(result).to(torch.float16).reshape(shape)
 
     # ------------------------------------------------------------------
     #  Q4_0: 32 values per block, 2 bytes scale + 16 bytes data = 18 bytes
@@ -85,15 +145,20 @@ class Dequantizer:
 
         # Quantized nibbles in bytes 2..17 (16 bytes = 32 nibbles)
         qs = data[:, 2:]  # (n_blocks, 16)
-        low = (qs & 0x0F).astype(np.float32) - 8.0
-        high = ((qs >> 4) & 0x0F).astype(np.float32) - 8.0
-
-        # Interleave low/high nibbles
+        
+        # Allocate output buffer directly
         values = np.empty((n_blocks, 32), dtype=np.float32)
-        values[:, :16] = low
-        values[:, 16:] = high
+        
+        # Write directly into buffer to save memory
+        # low nibbles
+        values[:, :16] = (qs & 0x0F).astype(np.float32)
+        values[:, :16] -= 8.0
+        
+        # high nibbles
+        values[:, 16:] = ((qs >> 4) & 0x0F).astype(np.float32)
+        values[:, 16:] -= 8.0
 
-        # Apply scale
+        # Apply scale in-place
         values *= scales[:, np.newaxis]
 
         result = values.flatten()[:n_elements]
