@@ -226,37 +226,31 @@ class CELAEngine:
     # ==================================================================
     def generate(
         self,
-        prompt: str,
+        prompt: Optional[str] = None,
+        input_ids: Optional[torch.Tensor] = None,
         max_tokens: int = 100,
         temperature: float = 0.7,
         top_k: int = 50,
         stream: bool = True,
     ):
         """
-        Generate text from a prompt.
-
-        Yields tokens one at a time if stream=True.
-
-        Args:
-            prompt:      Input text
-            max_tokens:  Maximum tokens to generate
-            temperature: Sampling temperature (0 = greedy)
-            top_k:       Top-K sampling parameter
-            stream:      If True, yield tokens as they are generated
-
-        Yields:
-            str: Generated tokens (one at a time)
+        Generate text from a prompt or input_ids.
         """
-        if self.tokenizer is None:
-            raise RuntimeError("No tokenizer loaded. Use from_pretrained().")
+        if prompt is None and input_ids is None:
+            raise ValueError("Either prompt or input_ids must be provided.")
+        
+        if prompt is not None:
+            if self.tokenizer is None:
+                raise RuntimeError("No tokenizer loaded. Provide tokenizer_id during initialization or pass input_ids directly.")
+            input_ids = self.tokenizer(prompt, return_tensors="pt")["input_ids"]
+        
         if self._load_layer_fn is None:
             raise RuntimeError("No model loaded.")
 
         n_layers = self.config.get("n_layers", 32)
         device = self.device
 
-        # Tokenize
-        input_ids = self.tokenizer(prompt, return_tensors="pt")["input_ids"]
+        # Tokenize (already done if input_ids provided or prompt processed)
         all_ids = input_ids.clone()
         generated = []
 
