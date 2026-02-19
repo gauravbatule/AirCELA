@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "aircela"
+version = "1.0.0"
+description = "AirCELA: The fastest AirLLM-style inference engine. Run 70B models on 4GB VRAM with double-buffer prefetching."
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "CELA Proprietary License — See LICENSE"}
+authors = [
+    {name = "Gaurav Batule", email = "gauravbatule@cela-engine.dev"},
+]
+keywords = ["airllm", "llm", "inference", "gpu", "transformer", "gguf", "huggingface", "layer-streaming", "vram-optimization"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Programming Language :: Python :: 3",
+]
+
+dependencies = [
+    "torch>=2.0",
+    "numpy>=1.24",
+    "psutil>=5.9",
+    "transformers>=4.35",
+    "huggingface_hub>=0.19",
+    "safetensors>=0.4",
+]
+
+[project.scripts]
+aircela = "aircela.cli:main"
+cela = "aircela.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["aircela*"]

@@ -1,0 +1,41 @@
+CELA Proprietary License
+Version 1.0, February 2026
+
+Copyright (c) 2026 Gaurav Batule. All rights reserved.
+
+Permission is hereby granted to any person obtaining a copy
+of this software and associated documentation files (the "Software"),
+to use the Software for personal, educational, and non-commercial
+purposes, subject to the following conditions:
+
+1. ATTRIBUTION REQUIRED
+   - Any use, modification, or distribution of this software MUST
+     include clear attribution to the original author:
+     "Developed by Gaurav Batule — https://github.com/gauravbatule/cela"
+   - Attribution must be visible in any user-facing output, documentation,
+     or derived works.
+
+2. NON-COMMERCIAL USE
+   - Commercial use of this software requires a separate commercial license.
+   - Contact gauravbatule@cela-engine.dev for commercial licensing inquiries.
+
+3. NO WARRANTY
+   - THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+     EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+     MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+
+4. MODIFICATIONS
+   - You may modify the Software for personal use.
+   - Public distribution of modified versions must:
+     a) Clearly state that modifications were made
+     b) Credit the original author (Gaurav Batule)
+     c) Link back to the original repository
+
+5. AI-ASSISTED DEVELOPMENT NOTICE
+   Portions of this codebase were developed with AI assistance (vibe-coded).
+   All architecture decisions, validation, and final code review were
+   performed by Gaurav Batule.
+
+For commercial licensing, partnerships, or inquiries:
+  Email: gauravbatule@cela-engine.dev
+  GitHub: https://github.com/gauravbatule

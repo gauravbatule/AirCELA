@@ -1,0 +1,40 @@
+# CELA .gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Test output files
+*.txt
+!requirements.txt
+
+# IDE
+.vscode/
+.idea/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temp files
+__cela_bench_tmp__
+*.json
+!pyproject.toml
+
+# HuggingFace cache (don't commit model weights!)
+*.safetensors
+*.bin
+*.gguf
+
+# Legacy files (old prototypes)
+_legacy/
