@@ -300,6 +300,11 @@ Clear KV caches to start a fresh conversation.
 
 ```
 AirCELA/
+├── .github/
+│   ├── ISSUE_TEMPLATE/
+│   │   ├── bug_report.md       # Bug report template
+│   │   └── feature_request.md  # Feature request template
+│   └── PULL_REQUEST_TEMPLATE.md
 ├── aircela/                    # Main package
 │   ├── __init__.py             # Lazy imports (fast startup)
 │   ├── engine.py               # Core inference engine
@@ -314,6 +319,10 @@ AirCELA/
 │   ├── basic_generation.py     # HuggingFace model example
 │   └── ollama_inference.py     # Ollama/GGUF model example
 ├── _legacy/                    # Old prototypes (not part of the package)
+├── CONTRIBUTING.md             # How to contribute
+├── CODE_OF_CONDUCT.md          # Community standards
+├── SECURITY.md                 # Security policy
+├── CHANGELOG.md                # Version history
 ├── requirements.txt            # Python dependencies
 ├── pyproject.toml              # Package configuration
 ├── LICENSE                     # CELA Proprietary License
@@ -366,6 +375,17 @@ for tok in engine.generate(input_ids=ids, max_tokens=20):
 **Cause:** The model uses a quantization format AirCELA doesn't support yet.
 
 **Supported:** F32, F16, Q4_0, Q4_1, Q8_0, Q6_K
+
+---
+
+## 🤝 Contributing
+
+We welcome contributions! See our community docs:
+
+- 📋 [**Contributing Guide**](CONTRIBUTING.md) — How to set up, code style, PR process
+- 🌟 [**Code of Conduct**](CODE_OF_CONDUCT.md) — Community standards
+- 🔒 [**Security Policy**](SECURITY.md) — Reporting vulnerabilities
+- 📝 [**Changelog**](CHANGELOG.md) — Version history and roadmap
 
 ---
 
